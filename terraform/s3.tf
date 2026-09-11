@@ -1,0 +1,56 @@
+####################################################
+# One data lake bucket, bronze/silver/gold as prefixes (not separate buckets) — standard
+# medallion-in-one-bucket layout, cheaper and simpler to manage than bucket-per-layer.
+# Bucket names must be globally unique across all of AWS, hence the account ID suffix.
+####################################################
+resource "aws_s3_bucket" "data_lake" {
+  bucket = "${var.project}-data-${var.env}-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_versioning" "data_lake" {
+  bucket = aws_s3_bucket.data_lake.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data_lake" {
+  bucket                  = aws_s3_bucket.data_lake.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data_lake" {
+  bucket = aws_s3_bucket.data_lake.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Glue ETL script sources, uploaded by Terraform from ../etl/. Kept in the same bucket under
+# its own prefix rather than a separate bucket — one less resource to manage for a
+# single-project repo this size.
+resource "aws_s3_object" "bronze_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/bronze_ingest.py"
+  source = "${path.module}/../etl/bronze/bronze_ingest.py"
+  etag   = filemd5("${path.module}/../etl/bronze/bronze_ingest.py")
+}
+
+resource "aws_s3_object" "silver_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/silver_transform.py"
+  source = "${path.module}/../etl/silver/silver_transform.py"
+  etag   = filemd5("${path.module}/../etl/silver/silver_transform.py")
+}
+
+resource "aws_s3_object" "gold_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/gold_aggregate.py"
+  source = "${path.module}/../etl/gold/gold_aggregate.py"
+  etag   = filemd5("${path.module}/../etl/gold/gold_aggregate.py")
+}

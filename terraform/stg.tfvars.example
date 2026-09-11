@@ -1,0 +1,3 @@
+# Copy to stg.tfvars (gitignored) and fill in your own values.
+env                 = "stg"
+notification_email  = "you@example.com"

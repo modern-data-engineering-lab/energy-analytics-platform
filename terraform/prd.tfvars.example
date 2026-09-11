@@ -1,0 +1,3 @@
+# Copy to prd.tfvars (gitignored) and fill in your own values.
+env                 = "prd"
+notification_email  = "you@example.com"

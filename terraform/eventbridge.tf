@@ -7,6 +7,10 @@
 resource "aws_sqs_queue" "scheduler_dlq" {
   name                      = "${var.project}-scheduler-dlq-${var.env}"
   message_retention_seconds = 1209600 # 14 days, the SQS maximum
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 resource "aws_sqs_queue_policy" "scheduler_dlq" {

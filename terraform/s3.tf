@@ -5,6 +5,11 @@
 ####################################################
 resource "aws_s3_bucket" "data_lake" {
   bucket = "${var.project}-data-${var.env}-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name    = "Energy Analytics Data Lake"
+    Project = var.project_tag
+  }
 }
 
 resource "aws_s3_bucket_versioning" "data_lake" {

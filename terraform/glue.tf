@@ -4,6 +4,10 @@
 ####################################################
 resource "aws_glue_catalog_database" "this" {
   name = replace("${var.project}_${var.env}", "-", "_") # Glue database names can't contain hyphens
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################
@@ -34,6 +38,10 @@ resource "aws_glue_job" "bronze_ingest" {
   worker_type       = var.glue_worker_type
   number_of_workers = var.glue_number_of_workers
   timeout           = 15
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################
@@ -65,6 +73,10 @@ resource "aws_glue_job" "silver_transform" {
   worker_type       = var.glue_worker_type
   number_of_workers = var.glue_number_of_workers
   timeout           = 15
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################
@@ -94,6 +106,10 @@ resource "aws_glue_job" "gold_aggregate" {
   worker_type       = var.glue_worker_type
   number_of_workers = var.glue_number_of_workers
   timeout           = 15
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################
@@ -121,6 +137,10 @@ resource "aws_glue_job" "outage_classifier" {
 
   max_capacity = 0.0625 # smallest Python Shell capacity — 1/16 DPU, plenty for this data size
   timeout      = 15
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################

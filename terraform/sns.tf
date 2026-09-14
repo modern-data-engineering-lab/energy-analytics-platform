@@ -5,6 +5,10 @@
 ####################################################
 resource "aws_sns_topic" "pipeline_failures" {
   name = "${var.project}-pipeline-failures-${var.env}"
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 resource "aws_sns_topic_subscription" "email" {

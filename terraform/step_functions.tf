@@ -74,4 +74,8 @@ resource "aws_sfn_state_machine" "pipeline" {
       }
     }
   })
+
+  tags = {
+    Project = var.project_tag
+  }
 }

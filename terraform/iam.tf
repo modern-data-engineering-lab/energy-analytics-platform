@@ -52,6 +52,10 @@ resource "aws_iam_policy" "permission_boundary" {
       },
     ]
   })
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 ####################################################
@@ -71,6 +75,10 @@ resource "aws_iam_role" "glue_job" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 resource "aws_iam_role_policy" "glue_job" {
@@ -129,6 +137,10 @@ resource "aws_iam_role" "step_functions" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 resource "aws_iam_role_policy" "step_functions" {
@@ -171,6 +183,10 @@ resource "aws_iam_role" "eventbridge_scheduler" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  tags = {
+    Project = var.project_tag
+  }
 }
 
 resource "aws_iam_role_policy" "eventbridge_scheduler" {

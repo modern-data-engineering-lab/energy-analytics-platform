@@ -19,4 +19,9 @@ resource "aws_athena_workgroup" "this" {
 
     bytes_scanned_cutoff_per_query = 1073741824 # 1 GB — far more than this dataset needs; a guard rail, not a real limit
   }
+
+  tags = {
+    Name    = "Energy Analytics Athena Workgroup"
+    Project = var.project_tag
+  }
 }

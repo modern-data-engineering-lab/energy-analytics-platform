@@ -191,6 +191,15 @@ nets: the *scheduler* failing to even invoke the pipeline (caught by the DLQ) ve
 publishes to SNS). A single Lambda doing both jobs would conflate these into one failure mode
 and lose the distinction.
 
+**Why tags are minimal at the provider level and explicit per resource.** Matches this
+portfolio's real AWS infra house style: `default_tags` on the provider holds one account-wide
+constant (`ManagedBy`), and every taggable resource sets its own `Project` tag from a variable
+(`var.project_tag`) rather than relying on default_tags to carry it — a couple of "headline"
+resources (the S3 bucket, the Athena workgroup) also get a human-readable `Name`. Environment
+is deliberately never a tag here, matching that same house convention — `${var.env}` is
+already threaded through every resource *name*, so a redundant `Environment` tag would just be
+one more thing that could drift out of sync with the name it's describing.
+
 ## Stack
 
 AWS (S3, Glue, Athena, Lambda, Step Functions, EventBridge Scheduler, SNS, SQS) · Terraform ·

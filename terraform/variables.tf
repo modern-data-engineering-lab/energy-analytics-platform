@@ -19,6 +19,12 @@ variable "project" {
   default     = "energy-analytics"
 }
 
+variable "project_tag" {
+  description = "Human-readable project name for the Project tag on every taggable resource — mirrors this portfolio's real AWS infra house style (per-resource Project tag via a variable, rather than folding it into provider-level default_tags)."
+  type        = string
+  default     = "Energy Analytics Platform"
+}
+
 variable "notification_email" {
   description = "Email address subscribed to the pipeline-failure SNS topic (paired with the EventBridge Scheduler DLQ)."
   type        = string

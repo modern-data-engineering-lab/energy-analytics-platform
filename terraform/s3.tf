@@ -48,9 +48,27 @@ resource "aws_s3_object" "silver_script" {
   etag   = filemd5("${path.module}/../etl/silver/silver_transform.py")
 }
 
+# The pure canonicalization logic silver_transform.py imports — Glue only deploys the single
+# file named in a job's script_location, so this reaches the job via --extra-py-files instead
+# (see glue.tf). Kept as its own object, not bundled into silver_script, so it stays a single
+# source of truth shared with tests/test_transforms.py (which imports the same file directly).
+resource "aws_s3_object" "transforms_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/transforms.py"
+  source = "${path.module}/../etl/transforms.py"
+  etag   = filemd5("${path.module}/../etl/transforms.py")
+}
+
 resource "aws_s3_object" "gold_script" {
   bucket = aws_s3_bucket.data_lake.id
   key    = "scripts/gold_aggregate.py"
   source = "${path.module}/../etl/gold/gold_aggregate.py"
   etag   = filemd5("${path.module}/../etl/gold/gold_aggregate.py")
+}
+
+resource "aws_s3_object" "classifier_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/train_and_predict.py"
+  source = "${path.module}/../ml/outage_classifier/train_and_predict.py"
+  etag   = filemd5("${path.module}/../ml/outage_classifier/train_and_predict.py")
 }

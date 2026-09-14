@@ -10,7 +10,7 @@ resource "aws_sfn_state_machine" "pipeline" {
   role_arn = aws_iam_role.step_functions.arn
 
   definition = jsonencode({
-    Comment = "IBEDC interruption data: bronze -> silver -> gold"
+    Comment = "IBEDC interruption data: bronze -> silver -> gold -> classify"
     StartAt = "BronzeIngest"
     States = {
       BronzeIngest = {
@@ -19,9 +19,9 @@ resource "aws_sfn_state_machine" "pipeline" {
         Parameters = {
           JobName = aws_glue_job.bronze_ingest.name
         }
-        Next    = "SilverTransform"
-        Catch   = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
-        Retry   = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
+        Next  = "SilverTransform"
+        Catch = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
+        Retry = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
       }
       SilverTransform = {
         Type     = "Task"
@@ -29,15 +29,25 @@ resource "aws_sfn_state_machine" "pipeline" {
         Parameters = {
           JobName = aws_glue_job.silver_transform.name
         }
-        Next    = "GoldAggregate"
-        Catch   = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
-        Retry   = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
+        Next  = "GoldAggregate"
+        Catch = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
+        Retry = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
       }
       GoldAggregate = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           JobName = aws_glue_job.gold_aggregate.name
+        }
+        Next  = "ClassifyOutages"
+        Catch = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
+        Retry = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
+      }
+      ClassifyOutages = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          JobName = aws_glue_job.outage_classifier.name
         }
         End   = true
         Catch = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]

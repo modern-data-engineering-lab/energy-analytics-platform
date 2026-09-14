@@ -222,36 +222,156 @@ athena/views/                MTTR/MTBF leaderboard, outage-type summary, per-typ
 tests/test_transforms.py    Unit tests against etl/transforms.py directly — no Spark, no AWS.
 ```
 
+## Getting Started
+
+Assumes an AWS account with credentials configured (`aws sts get-caller-identity` succeeds),
+Terraform installed, and the 12 raw IBEDC monthly `.xlsx` workbooks available locally (see
+"The real data" above — this dataset is personally sourced, not bundled in the repo).
+
+### 1. Deploy the platform
+
+```bash
+cd terraform
+terraform init
+terraform apply -var="env=stg" -var="notification_email=you@example.com"
+```
+
+### 2. Upload the raw data
+
+Every output below is used by a specific step further down — this is deliberate, not
+decorative; see the table at the end of this section.
+
+```bash
+aws s3 cp <local-folder-of-12-xlsx-files>/ "$(terraform output -raw raw_upload_prefix)" \
+  --recursive --exclude "*" --include "*.xlsx"
+```
+
+### 3. Run the pipeline
+
+```bash
+aws stepfunctions start-execution \
+  --state-machine-arn "$(terraform output -raw state_machine_arn)" \
+  --name "manual-run-$(date +%s)"
+```
+
+Takes roughly 8 minutes end-to-end (mostly Glue job cold-start — `G.1X` workers spin up fresh
+each run; the data itself is a few thousand rows). Poll with:
+
+```bash
+aws stepfunctions describe-execution --execution-arn <execution-arn-from-above> --query status
+```
+
+**A `SUCCEEDED` status alone doesn't mean the ETL actually completed** — the state machine
+catches any Glue job failure and routes it to `NotifyFailure` (an SNS publish), which itself
+"succeeds," so the *overall execution* status reads `SUCCEEDED` either way. Check the shape of
+`describe-execution`'s `output` field to tell them apart: a real pipeline success looks like a
+Glue `JobRunState: SUCCEEDED` blob (from the last state, `ClassifyOutages`); a masked failure
+looks like an SNS `MessageId`/`SdkHttpMetadata` blob (from `NotifyFailure`). This distinction
+is exactly what caught the three real bugs in the Troubleshooting notes below.
+
+### 4. Register partitions and create the Athena views
+
+`interruptions_clean`, `interruptions_quarantine`, and `classifier_features` are
+Hive-partitioned by `source_month`; Athena needs partitions registered once per run before it
+can see new data (`MSCK REPAIR TABLE`) — `mttr_mtbf_by_feeder` and `classifier_predictions`
+aren't partitioned and don't need this.
+
+```bash
+DB="$(terraform output -raw glue_database)"
+WG="$(terraform output -raw athena_workgroup)"
+
+for t in classifier_features interruptions_clean interruptions_quarantine; do
+  aws athena start-query-execution --query-string "MSCK REPAIR TABLE $t" \
+    --query-execution-context Database="$DB" --work-group "$WG"
+done
+
+for f in athena/views/*.sql; do
+  sql=$(sed "s/{database}/$DB/" "$f" | grep -v '^--')
+  aws athena start-query-execution --query-string "$sql" \
+    --query-execution-context Database="$DB" --work-group "$WG"
+done
+```
+
+### 5. Query the results
+
+```bash
+aws athena start-query-execution --query-string "SELECT * FROM mttr_mtbf_leaderboard LIMIT 10" \
+  --query-execution-context Database="$DB" --work-group "$WG"
+# then: aws athena get-query-results --query-execution-id <id-from-above>
+```
+
+Or, independent of Athena entirely, inspect the classifier's trained model and metrics
+directly:
+
+```bash
+aws s3 cp "s3://$(terraform output -raw data_lake_bucket)/models/outage_classifier/metrics.json" -
+```
+
+### What each Terraform output is actually for
+
+| Output | Used in |
+|---|---|
+| `raw_upload_prefix` | Step 2 — where the raw monthly workbooks are uploaded |
+| `state_machine_arn` | Step 3 — triggers Bronze → Silver → Gold → Classify |
+| `glue_database` | Steps 4–5 — the Athena database every query runs against |
+| `athena_workgroup` | Steps 4–5 — where Athena queries execute and results land |
+| `data_lake_bucket` | Step 5 (alt path) — direct S3 inspection of model/metrics, without Athena |
+
+### Troubleshooting notes (real errors hit running this pipeline)
+
+- **`ImportError: Missing optional dependency 'openpyxl'`** — `bronze_ingest.py` reads the raw
+  `.xlsx` files with `pandas.read_excel`, which needs `openpyxl` as its Excel engine; pandas
+  doesn't bundle it and Glue's `glueetl` runtime doesn't include it by default. Fixed by adding
+  `"--additional-python-modules" = "openpyxl"` to the `bronze_ingest` Glue job in
+  `terraform/glue.tf`.
+- **`EntityNotFoundException` on `getCatalogSink`, then silent data duplication** —
+  `silver_transform.py` and `gold_aggregate.py` originally wrote their output twice: once
+  directly to S3 (`DataFrame.write.parquet`, correct and partitioned), then again via
+  `glue_context.write_dynamic_frame.from_catalog(...)` to self-register the table for Athena.
+  That second call requires the target Glue Catalog table to already exist — it errored
+  outright the first time (no table had been pre-declared), and after the tables *were*
+  declared in Terraform (matching the existing `classifier_predictions` pattern), it "worked"
+  but turned out not to honor the partitioned layout at all: it silently wrote a second, flat,
+  unpartitioned copy of the full dataset into the same S3 prefix on every run — real, silent
+  row duplication, not a crash. Fixed by declaring `interruptions_clean`,
+  `interruptions_quarantine`, `mttr_mtbf_by_feeder`, and `classifier_features` directly in
+  Terraform and deleting the redundant catalog-write step entirely — the direct partitioned
+  write was already correct on its own.
+- **`KeyError: "['source_month'] not in index"` in the classifier** — `train_and_predict.py`
+  reads `gold/classifier_features/` with plain `boto3` + `pandas.read_parquet`, file by file.
+  Spark strips a Hive partition column (`source_month=APRIL/...`) out of each file's own
+  schema and reconstructs it from the directory name on read — plain pandas has no such
+  partition-awareness, so the column was simply missing from every row. Fixed by having
+  `read_parquet_prefix()` parse `key=value` segments out of the S3 key itself and add them
+  back as columns.
+
+These three compounded: the first attempt never got past Bronze, the second got past Bronze
+but failed at Silver, the third got all the way to a "SUCCEEDED" that was actually a masked
+failure at the classifier step. Each was only caught by checking the actual `output` shape and
+`get-execution-history` rather than trusting the top-level Step Functions status — see step 3
+above.
+
 ## Current build status
 
 Being upfront about exactly where this stands, rather than implying more than what's actually
 been run:
 
-- ✅ **Terraform written** — full platform layer (S3, IAM, Glue including the classifier's
-  Python Shell job, Step Functions, EventBridge Scheduler, SNS, Athena, the
-  `classifier_predictions` catalog table). **Not yet applied** to the real AWS account.
-- ✅ **Bronze/silver/gold ETL scripts + XGBoost classifier written.** The cleaning and
-  modeling *logic* — feeder/outage-type canonicalization, date quarantine, the classifier's
-  feature set and its cause-of-outage leakage check — was validated standalone against the
-  real 6,609-row dataset with plain pandas/scikit-learn/XGBoost before being written into the
-  Glue (PySpark and Python Shell) scripts. The quoted percentages (99.95% outage-type match,
-  98.0% feeder match, 66.6%/82.4% classifier accuracy) are all from that standalone
-  validation, not from a live Glue run. **The actual Glue jobs have not yet been run** —
-  PySpark-specific issues (the `awsglue`/Spark APIs behave differently from plain pandas in
-  ways that only surface at runtime) haven't been ruled out yet.
+- ✅ **Terraform applied** to a real AWS account (`eu-north-1`) — S3, IAM, Glue (including the
+  classifier's Python Shell job and all five catalog tables), Step Functions, EventBridge
+  Scheduler, SNS, Athena workgroup.
+- ✅ **Full pipeline run end-to-end against live AWS**, including the three real bugs above —
+  Bronze → Silver → Gold → Classify all genuinely completed (verified via
+  `get-execution-history`, not just a top-level "SUCCEEDED" status). The classifier's actual
+  live-run accuracy (66.7%) landed within 0.1 point of the standalone pandas/scikit-learn
+  validation quoted throughout this README (66.6%) — real confirmation that the Glue port of
+  that logic matches the validated logic, not a coincidence.
 - ✅ **Unit tests written and passing** (`tests/test_transforms.py`, 14 tests) — against the
   pure canonicalization logic in `etl/transforms.py`, no Spark/AWS needed to run them. One of
   these tests caught a real bug in the feeder-name mapping before it ever reached AWS — see
   "How the cleaning was actually validated" above.
-- ✅ **Athena SQL views written** (`athena/views/`) — MTTR/MTBF leaderboard, outage-type
-  summary, per-type classifier accuracy. **Not yet run** — they query tables that don't exist
-  until the pipeline has actually executed once.
-- ⬜ **End-to-end run against live AWS** — not yet done. Nothing in this repo has been
-  deployed; `terraform apply` hasn't been run.
-
-This README will be updated with real run results (and any bugs hit + fixed, the same
-Troubleshooting-notes discipline as the rest of this portfolio) once the pipeline has actually
-executed — not written retroactively to look cleaner than the process was.
+- ✅ **Athena SQL views created and queried against live data** (`athena/views/`) — MTTR/MTBF
+  leaderboard, outage-type summary, per-type classifier accuracy. All three return real,
+  non-empty results (see Getting Started, step 5).
 
 ## Cost awareness
 

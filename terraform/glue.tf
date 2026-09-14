@@ -168,3 +168,200 @@ resource "aws_glue_catalog_table" "classifier_predictions" {
     }
   }
 }
+
+####################################################
+# Silver and gold's own output tables, registered in Terraform for the same reason as
+# classifier_predictions above: glue_context.write_dynamic_frame.from_catalog() (used by
+# silver_transform.py and gold_aggregate.py to register their tables for Athena) requires the
+# target table to already exist — it's a write into an existing catalog entry, not a
+# create-if-missing call. Schemas mirror exactly what each script writes.
+####################################################
+locals {
+  # interruptions_clean and interruptions_quarantine share one schema: both are filters of the
+  # same `parsed` DataFrame in silver_transform.py.
+  interruptions_columns = [
+    { name = "date_raw", type = "string" },
+    { name = "location", type = "string" },
+    { name = "name_of_affected_feeder", type = "string" },
+    { name = "event_no", type = "string" },
+    { name = "type_of_outage", type = "string" },
+    { name = "nature_cause_of_outage", type = "string" },
+    { name = "relay_target", type = "string" },
+    { name = "start_time", type = "string" },
+    { name = "time_restored", type = "string" },
+    { name = "duration_hours", type = "string" },
+    { name = "load_loss_mw", type = "string" },
+    { name = "no_of_customers_restored", type = "string" },
+    { name = "total_customers_served", type = "string" },
+    { name = "customer_hours_interruption", type = "string" },
+    { name = "remarks", type = "string" },
+    { name = "source_file", type = "string" },
+    { name = "ingested_at", type = "string" },
+    { name = "event_date", type = "date" },
+    { name = "feeder_canonical", type = "string" },
+    { name = "outage_type_canonical", type = "string" },
+    { name = "is_transformer_event", type = "boolean" },
+    { name = "duration_hours_num", type = "double" },
+    { name = "load_loss_mw_num", type = "double" },
+    { name = "no_of_customers_restored_num", type = "double" },
+    { name = "customer_hours_interruption_num", type = "double" },
+    { name = "event_no_num", type = "int" },
+  ]
+}
+
+resource "aws_glue_catalog_table" "interruptions_clean" {
+  name          = "interruptions_clean"
+  database_name = aws_glue_catalog_database.this.name
+
+  table_type = "EXTERNAL_TABLE"
+  parameters = { classification = "parquet" }
+
+  partition_keys {
+    name = "source_month"
+    type = "string"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.bucket}/silver/interruptions_clean/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+    }
+
+    dynamic "columns" {
+      for_each = local.interruptions_columns
+      content {
+        name = columns.value.name
+        type = columns.value.type
+      }
+    }
+  }
+}
+
+resource "aws_glue_catalog_table" "interruptions_quarantine" {
+  name          = "interruptions_quarantine"
+  database_name = aws_glue_catalog_database.this.name
+
+  table_type = "EXTERNAL_TABLE"
+  parameters = { classification = "parquet" }
+
+  partition_keys {
+    name = "source_month"
+    type = "string"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.bucket}/silver/interruptions_quarantine/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+    }
+
+    dynamic "columns" {
+      for_each = local.interruptions_columns
+      content {
+        name = columns.value.name
+        type = columns.value.type
+      }
+    }
+  }
+}
+
+resource "aws_glue_catalog_table" "mttr_mtbf_by_feeder" {
+  name          = "mttr_mtbf_by_feeder"
+  database_name = aws_glue_catalog_database.this.name
+
+  table_type = "EXTERNAL_TABLE"
+  parameters = { classification = "parquet" }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.bucket}/gold/mttr_mtbf_by_feeder/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+    }
+
+    columns {
+      name = "feeder_canonical"
+      type = "string"
+    }
+    columns {
+      name = "total_outages"
+      type = "bigint"
+    }
+    columns {
+      name = "mttr_hours"
+      type = "double"
+    }
+    columns {
+      name = "mtbf_hours"
+      type = "double"
+    }
+    columns {
+      name = "total_customer_hours_interruption"
+      type = "double"
+    }
+  }
+}
+
+resource "aws_glue_catalog_table" "classifier_features" {
+  name          = "classifier_features"
+  database_name = aws_glue_catalog_database.this.name
+
+  table_type = "EXTERNAL_TABLE"
+  parameters = { classification = "parquet" }
+
+  partition_keys {
+    name = "source_month"
+    type = "string"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.bucket}/gold/classifier_features/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+    }
+
+    columns {
+      name = "feeder_canonical"
+      type = "string"
+    }
+    columns {
+      name = "outage_type_canonical"
+      type = "string"
+    }
+    columns {
+      name = "duration_hours_num"
+      type = "double"
+    }
+    columns {
+      name = "load_loss_mw_num"
+      type = "double"
+    }
+    columns {
+      name = "no_of_customers_restored_num"
+      type = "double"
+    }
+    columns {
+      name = "customer_hours_interruption_num"
+      type = "double"
+    }
+    columns {
+      name = "event_no_num"
+      type = "int"
+    }
+    columns {
+      name = "is_transformer_event"
+      type = "boolean"
+    }
+  }
+}

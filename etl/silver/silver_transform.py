@@ -101,18 +101,12 @@ def main():
         .parquet(SILVER_QUARANTINE_PATH)
     )
 
-    for table_name, path in [
-        ("interruptions_clean", SILVER_CLEAN_PATH),
-        ("interruptions_quarantine", SILVER_QUARANTINE_PATH),
-    ]:
-        dyf = glue_context.create_dynamic_frame.from_options(
-            connection_type="s3",
-            connection_options={"paths": [path]},
-            format="parquet",
-        )
-        glue_context.write_dynamic_frame.from_catalog(
-            frame=dyf, database=DATABASE, table_name=table_name
-        )
+    # interruptions_clean and interruptions_quarantine are registered directly in Terraform
+    # (terraform/glue.tf), matching the location/partitioning written above — no separate
+    # catalog-registration write needed here. (A prior version of this job re-read the just
+    # -written Parquet and rewrote it via write_dynamic_frame.from_catalog to self-register the
+    # table; that call doesn't honor the partitioned layout and silently appended a second,
+    # flat, unpartitioned copy of the data to the same S3 prefix on every run.)
 
     clean_count = clean.count()
     quarantine_count = quarantine.count()

@@ -96,18 +96,11 @@ def main():
         .parquet(GOLD_FEATURES_PATH)
     )
 
-    for table_name, path in [
-        ("mttr_mtbf_by_feeder", GOLD_MTTR_MTBF_PATH),
-        ("classifier_features", GOLD_FEATURES_PATH),
-    ]:
-        dyf = glue_context.create_dynamic_frame.from_options(
-            connection_type="s3",
-            connection_options={"paths": [path]},
-            format="parquet",
-        )
-        glue_context.write_dynamic_frame.from_catalog(
-            frame=dyf, database=DATABASE, table_name=table_name
-        )
+    # mttr_mtbf_by_feeder and classifier_features are registered directly in Terraform
+    # (terraform/glue.tf), matching the location/partitioning written above — see
+    # silver_transform.py's equivalent comment for why there's no separate catalog-
+    # registration write here (write_dynamic_frame.from_catalog doesn't honor the partitioned
+    # layout and would silently duplicate the data on every run).
 
     print(
         f"Gold: {mttr_mtbf.count()} feeders in mttr_mtbf_by_feeder, "

@@ -23,7 +23,6 @@ IBEDC data (not assumed from the thesis's prose description) before being writte
    genuine transformer events, confirmed by inspecting every unmapped raw value by hand.
 """
 
-import re
 import sys
 
 from awsglue.context import GlueContext
@@ -32,6 +31,13 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
+
+# transforms.py holds the pure canonicalization logic — no pyspark/awsglue imports there, so
+# it's unit-testable on its own (see tests/test_transforms.py). Glue only deploys the single
+# script named in `script_location`; transforms.py reaches this job via the Glue job's
+# `--extra-py-files` argument (see terraform/glue.tf), which Glue downloads and puts on
+# sys.path automatically — importable directly, no manual path manipulation needed here.
+from transforms import canonicalize_feeder, canonicalize_outage_type
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "data_bucket", "database_name"])
 sc = SparkContext()
@@ -45,75 +51,6 @@ DATABASE = args["database_name"]
 BRONZE_PATH = f"s3://{BUCKET}/bronze/interruptions/"
 SILVER_CLEAN_PATH = f"s3://{BUCKET}/silver/interruptions_clean/"
 SILVER_QUARANTINE_PATH = f"s3://{BUCKET}/silver/interruptions_quarantine/"
-
-CANONICAL_FEEDERS = [
-    "OLUYOLE", "INTERCHANGE", "EXPRESS", "LIBERTY", "INDUSTRIAL", "ROM", "APETE",
-    "AGODI 1", "AGODI 2", "MINISTER", "SAMONDA", "FAN MILK", "ERUWA TOWN",
-    "ERUWA/LANLATE", "OMI ADIO", "APATA", "IYAGANKU", "ELEYELE",
-]
-
-# Real typos observed in the source data (validated against all 6,609 rows before writing this
-# — see the repo's data-exploration notes in README.md). Fixed explicitly, not via fuzzy match.
-KNOWN_FEEDER_TYPOS = {
-    "INDUSRIAL": "INDUSTRIAL", "INDUTRIAL": "INDUSTRIAL",
-    "INTERCHANE": "INTERCHANGE", "INTERCHNAGE": "INTERCHANGE", "INTRCHANGE": "INTERCHANGE",
-    "LBERTY": "LIBERTY", "LIBERTRY": "LIBERTY",
-    "M1NISTER": "MINISTER", "MINISTETR": "MINISTER", "MINSTER": "MINISTER",
-    "OLUYOLY": "OLUYOLE", "OLYOLE": "OLUYOLE",
-    "SAMANDA": "SAMONDA", "SAMODA": "SAMONDA",
-    "ERUW": "ERUWA",
-    "OMI-ADIO": "OMI ADIO",
-}
-
-CANONICAL_OUTAGE_TYPES = {
-    "EDCFO": "EDC F/O", "EDCEF": "EDC E/F", "EDCLS": "EDC L/S", "EDCPO": "EDC P/O",
-    "EDCOC": "EDC O/C", "TCNLS": "TCN L/S", "TCNFO": "TCN F/O", "TCNPO": "TCN P/O",
-    "GENSC": "GEN S/C",
-}
-
-
-def canonicalize_feeder(raw: str) -> str:
-    if raw is None:
-        return "UNMAPPED"
-    s = raw.upper().strip()
-    for typo, fix in KNOWN_FEEDER_TYPOS.items():
-        s = s.replace(typo, fix)
-    s = re.sub(r"[,.\-]", " ", s)
-    s = re.sub(r"\b(FDR|FEEDER|LINE|RESTORED|33KLV|33IV|33BKV|\d+KV|\d+MVA|@)\b", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    n_nospace = s.replace(" ", "")
-
-    if "AGODI" in n_nospace:
-        if "1" in n_nospace:
-            return "AGODI 1"
-        if "2" in n_nospace:
-            return "AGODI 2"
-        return "UNMAPPED"
-    if "ERUWA" in n_nospace:
-        if "LANLATE" in n_nospace or "LANALTE" in n_nospace:
-            return "ERUWA/LANLATE"
-        if "TOWN" in n_nospace:
-            return "ERUWA TOWN"
-        return "UNMAPPED"
-    if "APETE" in n_nospace:
-        return "APETE"
-    if "APATA" in n_nospace:
-        return "APATA"
-    for canon in CANONICAL_FEEDERS:
-        canon_key = canon.replace(" ", "").replace("/", "")
-        if canon_key in n_nospace or n_nospace in canon_key:
-            return canon
-    return "UNMAPPED"
-
-
-def canonicalize_outage_type(raw: str) -> str:
-    if raw is None:
-        return "OTHER"
-    s = raw.upper().strip()
-    s = re.sub(r"[\s/.\-]", "", s)
-    s = s.replace("0", "O")
-    return CANONICAL_OUTAGE_TYPES.get(s, "OTHER")
-
 
 canonicalize_feeder_udf = F.udf(canonicalize_feeder, StringType())
 canonicalize_outage_type_udf = F.udf(canonicalize_outage_type, StringType())

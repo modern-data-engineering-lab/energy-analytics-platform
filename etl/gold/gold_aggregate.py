@@ -109,7 +109,10 @@ def main():
             frame=dyf, database=DATABASE, table_name=table_name
         )
 
-    print(f"Gold: {mttr_mtbf.count()} feeders in mttr_mtbf_by_feeder, {features.count()} rows in classifier_features")
+    print(
+        f"Gold: {mttr_mtbf.count()} feeders in mttr_mtbf_by_feeder, "
+        f"{features.count()} rows in classifier_features"
+    )
     job.commit()
 
 

@@ -137,7 +137,8 @@ def main():
         format="parquet",
     )
 
-    print(f"Bronze: wrote {combined.shape[0]} rows across {combined['source_month'].nunique()} months")
+    n_months = combined["source_month"].nunique()
+    print(f"Bronze: wrote {combined.shape[0]} rows across {n_months} months")
     job.commit()
 
 

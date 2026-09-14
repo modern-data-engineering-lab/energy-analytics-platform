@@ -26,6 +26,7 @@ resource "aws_glue_job" "bronze_ingest" {
     "--TempDir"                          = "s3://${aws_s3_bucket.data_lake.bucket}/tmp/bronze/"
     "--data_bucket"                      = aws_s3_bucket.data_lake.bucket
     "--database_name"                    = aws_glue_catalog_database.this.name
+    "--additional-python-modules"        = "openpyxl"
     "--enable-metrics"                   = "true"
     "--enable-continuous-cloudwatch-log" = "true"
   }

@@ -53,6 +53,11 @@ resource "aws_sfn_state_machine" "pipeline" {
         Catch = [{ ErrorEquals = ["States.ALL"], Next = "NotifyFailure" }]
         Retry = [{ ErrorEquals = ["States.TaskFailed"], MaxAttempts = 1, IntervalSeconds = 30 }]
       }
+      # Publishes the SNS notification, then falls through to a Fail state — a Task's own
+      # success (the SNS publish succeeding) must not be allowed to become the *execution's*
+      # top-level status, or a real pipeline failure reads as "SUCCEEDED" in
+      # describe-execution/the console, with only the (easy to miss) execution history showing
+      # what actually happened.
       NotifyFailure = {
         Type     = "Task"
         Resource = "arn:aws:states:::sns:publish"
@@ -60,7 +65,12 @@ resource "aws_sfn_state_machine" "pipeline" {
           TopicArn = aws_sns_topic.pipeline_failures.arn
           Message  = "energy-analytics-platform pipeline (${var.env}) failed — check the Step Functions execution history for details."
         }
-        End = true
+        Next = "PipelineFailed"
+      }
+      PipelineFailed = {
+        Type  = "Fail"
+        Error = "PipelineFailed"
+        Cause = "A Glue job in the pipeline failed — see the NotifyFailure state's input and CloudWatch Logs for the failing job."
       }
     }
   })

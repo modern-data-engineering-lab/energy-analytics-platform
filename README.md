@@ -261,13 +261,13 @@ each run; the data itself is a few thousand rows). Poll with:
 aws stepfunctions describe-execution --execution-arn <execution-arn-from-above> --query status
 ```
 
-**A `SUCCEEDED` status alone doesn't mean the ETL actually completed** — the state machine
-catches any Glue job failure and routes it to `NotifyFailure` (an SNS publish), which itself
-"succeeds," so the *overall execution* status reads `SUCCEEDED` either way. Check the shape of
-`describe-execution`'s `output` field to tell them apart: a real pipeline success looks like a
-Glue `JobRunState: SUCCEEDED` blob (from the last state, `ClassifyOutages`); a masked failure
-looks like an SNS `MessageId`/`SdkHttpMetadata` blob (from `NotifyFailure`). This distinction
-is exactly what caught the three real bugs in the Troubleshooting notes below.
+`describe-execution`'s status is now trustworthy: `NotifyFailure` (the SNS-publish state a Glue
+failure gets routed to) falls through to a `Fail` state, so a real pipeline failure reports
+`FAILED` at the top level, not `SUCCEEDED`. That wasn't always true — see the Troubleshooting
+notes below for how the earlier, misleading version of this state machine caught (and masked)
+the first three real bugs in this pipeline, and why the executions from that period still show
+`SUCCEEDED` in the console even though they weren't: Step Functions execution history is
+immutable, so only runs made after the fix report correctly.
 
 ### 4. Register partitions and create the Athena views
 
@@ -344,12 +344,20 @@ aws s3 cp "s3://$(terraform output -raw data_lake_bucket)/models/outage_classifi
   partition-awareness, so the column was simply missing from every row. Fixed by having
   `read_parquet_prefix()` parse `key=value` segments out of the S3 key itself and add them
   back as columns.
+- **Step Functions reporting `SUCCEEDED` for pipeline runs that actually failed** — all three
+  bugs above were only caught by checking `get-execution-history`, because the state machine's
+  `NotifyFailure` state (an SNS publish that a Glue failure gets `Catch`-routed to) had
+  `End = true`. A Task state's own success — the SNS publish succeeding — became the
+  *execution's* top-level status, so a real pipeline failure read as `SUCCEEDED` in
+  `describe-execution` and the console, with only the execution history (easy to miss) showing
+  what actually happened. Fixed by chaining `NotifyFailure` into a `Fail` state instead of
+  ending there — verified by deliberately breaking a Glue job's script location and confirming
+  the resulting execution reports `FAILED`. Executions from before this fix keep showing
+  `SUCCEEDED` regardless — Step Functions execution history can't be edited after the fact.
 
-These three compounded: the first attempt never got past Bronze, the second got past Bronze
-but failed at Silver, the third got all the way to a "SUCCEEDED" that was actually a masked
-failure at the classifier step. Each was only caught by checking the actual `output` shape and
-`get-execution-history` rather than trusting the top-level Step Functions status — see step 3
-above.
+The first three compounded: the first attempt never got past Bronze, the second got past
+Bronze but failed at Silver, the third got all the way to a "SUCCEEDED" that was actually a
+masked failure at the classifier step.
 
 ## Current build status
 

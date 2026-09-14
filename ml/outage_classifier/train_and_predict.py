@@ -20,6 +20,7 @@ query), and a metrics summary. "Labeled" excludes two categories deliberately:
 import argparse
 import io
 import json
+import re
 
 import boto3
 import pandas as pd
@@ -37,7 +38,15 @@ FEATURE_COLUMNS = [
 ]
 
 
+PARTITION_RE = re.compile(r"/([^/=]+)=([^/]+)/")
+
+
 def read_parquet_prefix(s3_client, bucket: str, prefix: str) -> pd.DataFrame:
+    """gold/classifier_features/ is Hive-partitioned by source_month (a directory per month,
+    e.g. source_month=APRIL/), which Spark strips from each file's own schema and reconstructs
+    from the path on read. Plain pandas has no such Hive-partition awareness — reading each
+    file directly leaves partition columns missing, so they're restored here from the S3 key.
+    """
     paginator = s3_client.get_paginator("list_objects_v2")
     frames = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
@@ -46,7 +55,11 @@ def read_parquet_prefix(s3_client, bucket: str, prefix: str) -> pd.DataFrame:
             if not key.endswith(".parquet"):
                 continue
             body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
-            frames.append(pd.read_parquet(io.BytesIO(body)))
+            frame = pd.read_parquet(io.BytesIO(body))
+            for partition_col, partition_val in PARTITION_RE.findall(key):
+                if partition_col not in frame.columns:
+                    frame[partition_col] = partition_val
+            frames.append(frame)
     if not frames:
         raise RuntimeError(f"No Parquet files found under s3://{bucket}/{prefix}")
     return pd.concat(frames, ignore_index=True)

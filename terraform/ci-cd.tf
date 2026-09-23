@@ -145,6 +145,22 @@ resource "aws_iam_policy" "github_actions_deploy" {
         Resource = ["arn:aws:s3:::${var.project}-data-*", "arn:aws:s3:::${var.project}-data-*/*"]
       },
       {
+        # A genuinely self-referential gap: this role's own CI/CD apply needs to re-read (and,
+        # in principle, manage) the OIDC provider that lets it authenticate in the first place.
+        # An `oidc-provider/...` ARN is a different resource type from `role/`/`policy/` ARNs
+        # below, so it needs its own statement — missed on the first pass, caught on the first
+        # real re-apply, which got through every workload resource refresh cleanly and failed
+        # only on this one, self-referential read.
+        Sid    = "GithubOidcProvider"
+        Effect = "Allow"
+        Action = [
+          "iam:GetOpenIDConnectProvider", "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+          "iam:UpdateOpenIDConnectProviderThumbprint", "iam:TagOpenIDConnectProvider", "iam:UntagOpenIDConnectProvider",
+          "iam:ListOpenIDConnectProviderTags",
+        ]
+        Resource = "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
+      },
+      {
         Sid    = "ProjectIamRolesAndPolicies"
         Effect = "Allow"
         Action = [

@@ -1,8 +1,8 @@
-name: CI
+name: CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [main, stg]
   pull_request:
 
 jobs:
@@ -35,10 +35,72 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.0"
+          terraform_version: "1.10.5"
       - run: terraform init -backend=false
         working-directory: terraform
       - run: terraform validate
         working-directory: terraform
       - run: terraform fmt -check -recursive
+        working-directory: terraform
+
+  # stg -> staging, main -> production. Each deploy job needs a GitHub Environment of the same
+  # name — provisioned by terraform/ci-cd.tf, along with the AWS_ROLE_TO_ASSUME variable each
+  # job reads below (OIDC, no long-lived AWS keys). Both deploy jobs run the same command
+  # against the same shared Terraform config — only the backend key and the `env` var differ —
+  # so staging is a genuine rehearsal of the exact mechanism that later touches production, not
+  # a different, untested path.
+  deploy-staging:
+    name: Deploy to staging
+    needs: [lint, test, terraform-validate]
+    if: github.ref == 'refs/heads/stg' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_env: stg
+      TF_VAR_notification_email: shaibu.samuel@yahoo.com
+      # Only stg's apply actually manages these (see ci-cd.tf's `manage_ci_cd` gate) — passed
+      # here too so a CI-driven apply can't silently fall back to the unset default (null) and
+      # remove the production reviewer gate that was set locally when this was bootstrapped.
+      TF_VAR_production_approver_github_user_id: 57644935
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: eu-north-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - run: terraform init -backend-config=config/stg.hcl
+        working-directory: terraform
+      - run: terraform apply -auto-approve
+        working-directory: terraform
+
+  deploy-production:
+    name: Deploy to production
+    needs: [lint, test, terraform-validate]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_env: prd
+      TF_VAR_notification_email: shaibu.samuel@yahoo.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: eu-north-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - run: terraform init -backend-config=config/prd.hcl
+        working-directory: terraform
+      - run: terraform apply -auto-approve
         working-directory: terraform

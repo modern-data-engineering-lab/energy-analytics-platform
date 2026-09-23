@@ -51,7 +51,20 @@ resource "aws_iam_role" "github_actions_staging" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_owner}/${var.github_repository}:environment:staging"
+          # Two patterns, not one — GitHub's OIDC subject claim comes in two live formats
+          # right now: the classic "repo:owner/repo:environment:X" and a newer one that
+          # appends "@<owner_id>"/"@<repo_id>" to prevent renaming-based spoofing. Confirmed
+          # by actually decoding a real token from this exact workflow (not assumed from
+          # docs) — the real one came back as
+          # "repo:modern-data-engineering-lab@284937895/energy-analytics-platform@1239733152:environment:staging",
+          # which the single old-format pattern silently rejected with a generic "Not
+          # authorized" error that named neither the real cause nor the real claim. Same dual
+          # pattern the real infra repo's own OIDC trust policy already carries for the same
+          # reason.
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:${var.github_owner}/${var.github_repository}:environment:staging",
+            "repo:${var.github_owner}@*/${var.github_repository}@*:environment:staging",
+          ]
         }
       }
     }]
@@ -77,7 +90,11 @@ resource "aws_iam_role" "github_actions_production" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_owner}/${var.github_repository}:environment:production"
+          # See the staging role's identical comment above — same two-format reasoning.
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:${var.github_owner}/${var.github_repository}:environment:production",
+            "repo:${var.github_owner}@*/${var.github_repository}@*:environment:production",
+          ]
         }
       }
     }]

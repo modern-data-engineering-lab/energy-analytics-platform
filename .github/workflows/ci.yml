@@ -65,6 +65,12 @@ jobs:
       # here too so a CI-driven apply can't silently fall back to the unset default (null) and
       # remove the production reviewer gate that was set locally when this was bootstrapped.
       TF_VAR_production_approver_github_user_id: 57644935
+      # The `github` provider in ci-cd.tf reads this env var directly — it has nothing to do
+      # with AWS auth above. A repo-admin-scoped PAT, not the default Actions token, since
+      # managing environments/reviewers/variables via the API needs repo-admin rights the
+      # default token doesn't have. Secret can't be named GITHUB_TOKEN (GitHub reserves that
+      # prefix) so it's stored as TF_GITHUB_TOKEN and remapped here.
+      GITHUB_TOKEN: ${{ secrets.TF_GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4

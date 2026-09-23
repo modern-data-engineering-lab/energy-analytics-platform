@@ -123,9 +123,16 @@ resource "aws_iam_policy" "github_actions_deploy" {
     Version = "2012-10-17"
     Statement = [
       {
+        # s3:DeleteObject is required, not optional — native S3 locking (use_lockfile) writes
+        # a `.tflock` object to acquire the lock and deletes it to release. Without delete, a
+        # real apply completes successfully and then fails on its own lock-release step,
+        # leaving a stuck lock file that blocks every apply after it until someone with
+        # broader S3 access manually removes the object. Hit exactly this on the first real
+        # CI-driven apply — the resource changes themselves were fine, only the cleanup step
+        # failed, but that's still a real outage for the next run.
         Sid    = "TerraformState"
         Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
         Resource = [
           var.state_bucket_arn,
           "${var.state_bucket_arn}/*",

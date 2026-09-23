@@ -1,9 +1,22 @@
 ####################################################
-# GitHub Actions OIDC — lets CI assume an AWS role with short-lived STS credentials, no
-# long-lived access keys stored as a GitHub secret. Same mechanism as the real AWS infra repo
-# and databricks-bundle-template's own ci-cd.tf, reused here rather than reinvented.
+# Owned by the stg state only — every resource in this file is a one-time, account/repo-wide
+# singleton (one OIDC provider, one GitHub environment named "production", etc.), but this
+# module gets applied once per environment against SEPARATE state files (config/{stg,prd}.hcl).
+# Without this gate, applying against prd would try to *create* the same OIDC provider and
+# GitHub environments stg's state already owns — a real collision, not an update, caught before
+# ever running a prd apply. stg is the natural owner since it's the environment that's actually
+# been deployed and applied from day one; prd's own apply simply skips this file entirely
+# (count = 0) and relies on the role ARNs stg already wrote into the GitHub environment
+# variables below — assuming a role via OIDC needs the ARN, not Terraform ownership of it in
+# whichever state happens to be active.
 ####################################################
+locals {
+  manage_ci_cd = var.env == "stg"
+}
+
 resource "aws_iam_openid_connect_provider" "github_actions" {
+  count = local.manage_ci_cd ? 1 : 0
+
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
   # Root CA SHA1 fingerprint — fetched directly from the live TLS chain at
@@ -24,13 +37,14 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 # can't assume the production role, and either can be revoked independently.
 ####################################################
 resource "aws_iam_role" "github_actions_staging" {
-  name = "${var.project}-github-actions-staging"
+  count = local.manage_ci_cd ? 1 : 0
+  name  = "${var.project}-github-actions-staging"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.github_actions.arn }
+      Principal = { Federated = aws_iam_openid_connect_provider.github_actions[0].arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
@@ -49,13 +63,14 @@ resource "aws_iam_role" "github_actions_staging" {
 }
 
 resource "aws_iam_role" "github_actions_production" {
-  name = "${var.project}-github-actions-production"
+  count = local.manage_ci_cd ? 1 : 0
+  name  = "${var.project}-github-actions-production"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.github_actions.arn }
+      Principal = { Federated = aws_iam_openid_connect_provider.github_actions[0].arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
@@ -83,6 +98,7 @@ resource "aws_iam_role" "github_actions_production" {
 # production need the same deploy actions, only the trust condition differs.
 ####################################################
 resource "aws_iam_policy" "github_actions_deploy" {
+  count       = local.manage_ci_cd ? 1 : 0
   name        = "${var.project}-github-actions-deploy"
   description = "What CI is allowed to do: manage this project's own AWS resources and read/write its Terraform state."
 
@@ -145,13 +161,15 @@ resource "aws_iam_policy" "github_actions_deploy" {
 }
 
 resource "aws_iam_role_policy_attachment" "github_actions_staging_deploy" {
-  role       = aws_iam_role.github_actions_staging.name
-  policy_arn = aws_iam_policy.github_actions_deploy.arn
+  count      = local.manage_ci_cd ? 1 : 0
+  role       = aws_iam_role.github_actions_staging[0].name
+  policy_arn = aws_iam_policy.github_actions_deploy[0].arn
 }
 
 resource "aws_iam_role_policy_attachment" "github_actions_production_deploy" {
-  role       = aws_iam_role.github_actions_production.name
-  policy_arn = aws_iam_policy.github_actions_deploy.arn
+  count      = local.manage_ci_cd ? 1 : 0
+  role       = aws_iam_role.github_actions_production[0].name
+  policy_arn = aws_iam_policy.github_actions_deploy[0].arn
 }
 
 ####################################################
@@ -161,11 +179,13 @@ resource "aws_iam_role_policy_attachment" "github_actions_production_deploy" {
 # a human to click approve — without needing two different deploy mechanisms to get there.
 ####################################################
 data "github_repository" "this" {
+  count     = local.manage_ci_cd ? 1 : 0
   full_name = "${var.github_owner}/${var.github_repository}"
 }
 
 resource "github_repository_environment" "staging" {
-  repository  = data.github_repository.this.name
+  count       = local.manage_ci_cd ? 1 : 0
+  repository  = data.github_repository.this[0].name
   environment = "staging"
 
   deployment_branch_policy {
@@ -175,13 +195,15 @@ resource "github_repository_environment" "staging" {
 }
 
 resource "github_repository_environment_deployment_policy" "staging" {
-  repository     = data.github_repository.this.name
-  environment    = github_repository_environment.staging.environment
+  count          = local.manage_ci_cd ? 1 : 0
+  repository     = data.github_repository.this[0].name
+  environment    = github_repository_environment.staging[0].environment
   branch_pattern = "stg"
 }
 
 resource "github_repository_environment" "production" {
-  repository  = data.github_repository.this.name
+  count       = local.manage_ci_cd ? 1 : 0
+  repository  = data.github_repository.this[0].name
   environment = "production"
 
   deployment_branch_policy {
@@ -198,23 +220,26 @@ resource "github_repository_environment" "production" {
 }
 
 resource "github_repository_environment_deployment_policy" "production" {
-  repository     = data.github_repository.this.name
-  environment    = github_repository_environment.production.environment
+  count          = local.manage_ci_cd ? 1 : 0
+  repository     = data.github_repository.this[0].name
+  environment    = github_repository_environment.production[0].environment
   branch_pattern = "main"
 }
 
 # The role ARN isn't a secret — OIDC needs no credential value, just the ARN to ask STS for —
 # so it's a plain environment variable the workflow reads, not a GitHub secret.
 resource "github_actions_environment_variable" "staging_role_arn" {
-  repository    = data.github_repository.this.name
-  environment   = github_repository_environment.staging.environment
+  count         = local.manage_ci_cd ? 1 : 0
+  repository    = data.github_repository.this[0].name
+  environment   = github_repository_environment.staging[0].environment
   variable_name = "AWS_ROLE_TO_ASSUME"
-  value         = aws_iam_role.github_actions_staging.arn
+  value         = aws_iam_role.github_actions_staging[0].arn
 }
 
 resource "github_actions_environment_variable" "production_role_arn" {
-  repository    = data.github_repository.this.name
-  environment   = github_repository_environment.production.environment
+  count         = local.manage_ci_cd ? 1 : 0
+  repository    = data.github_repository.this[0].name
+  environment   = github_repository_environment.production[0].environment
   variable_name = "AWS_ROLE_TO_ASSUME"
-  value         = aws_iam_role.github_actions_production.arn
+  value         = aws_iam_role.github_actions_production[0].arn
 }

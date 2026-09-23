@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0.0, < 6.0.0"
     }
+    github = {
+      source  = "integrations/github"
+      version = ">= 6.0.0, < 7.0.0"
+    }
   }
 
   # Remote state: bucket/key/region come from -backend-config=config/{stg,prd}.hcl at init

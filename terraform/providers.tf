@@ -13,3 +13,10 @@ provider "aws" {
 }
 
 data "aws_caller_identity" "current" {}
+
+# GitHub auth: needs its own token exported as GITHUB_TOKEN — `gh auth login`'s token is NOT
+# automatically usable here, same real gotcha documented in databricks-bundle-template's
+# terraform/providers.tf.
+provider "github" {
+  owner = var.github_owner
+}

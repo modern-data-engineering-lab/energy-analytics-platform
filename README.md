@@ -93,6 +93,54 @@ timestamp within each feeder's own event sequence. This deliberately fixes the t
 acknowledged cross-feeder-overlap bug rather than reproducing it. See
 `etl/gold/gold_aggregate.py`.
 
+## Where the feeders are
+
+The interruption records name a feeder but say nothing about where it runs. Without location
+there's no way to ask the questions that matter for the physical network: how much vegetation
+grows near this line, what the terrain is like, how hard it rained there on the day it tripped.
+So before any environmental data can be joined, each feeder needs a place on a map.
+
+**What wasn't available.** IBEDC's feeder routes and injection substation locations aren't
+public. OpenStreetMap was checked directly (an Overpass query over Ibadan and the Ibarapa towns):
+it maps the transmission grid, 12 line segments at 132kV and 330kV operated by the Transmission
+Company of Nigeria, 632 towers and 14 substations, but **not a single 33kV distribution line**.
+None of its substations carries a name that appears in the interruption data.
+
+**What was available.** Distribution feeders are named after the area they serve, and most of
+those names resolve to a real OSM place, road or landmark. `reference/feeder_locations.csv`
+records one anchor point per feeder, the exact OSM feature it came from, and a confidence level:
+
+| Confidence | Feeders | Basis |
+|---|---|---|
+| high | SAMONDA, APETE, ERUWA TOWN | An OSM `place` node with the feeder's name |
+| medium | ERUWA/LANLATE, AGODI 1, AGODI 2, ELEYELE, FAN MILK, INDUSTRIAL, IYAGANKU, LIBERTY, OMI ADIO | A named landmark, road or industrial site rather than a place node |
+| low | OLUYOLE | The name is ambiguous in OSM (an LGA, an estate, several unrelated streets) |
+| unlocated | APATA, EXPRESS, INTERCHANGE, ROM, MINISTER | No matching feature, or several equally plausible ones |
+
+Five unlocated feeders out of 18 is a real gap, and it's left as one. These feeders keep their
+reliability metrics but get no location, so later analysis runs on the 13 located feeders and
+says so. A wrong location is worse than a missing one: it would attach another neighbourhood's
+vegetation and rainfall to a feeder's outage history, and nothing downstream could tell.
+
+Some calls in that file needed checking, not just a lookup. A place search for "Eleyele" bounded
+to the Ibadan area returns a village called Eleiyele 30 km to the west, unrelated to the Eleyele
+Reservoir district in the city that the feeder is named after. The two Agodi feeders and the
+OLUYOLE/INDUSTRIAL pair share an anchor point, because nothing public distinguishes them
+spatially. Each of these is written into the `anchor` column so it can be reviewed, not
+rediscovered.
+
+**Service areas, not routes.** `etl/geo.py` turns each anchor into a circular service area:
+2.5 km radius in the city, 4 km for Eruwa town, and 6 km for the ERUWA/LANLATE feeder, centred
+between the two towns (8.2 km apart) so the circle covers both. These radii are an assumption,
+not a measurement. The circles are drawn on a sphere, not in raw degrees, so they stay round in
+kilometres. In dense central Ibadan they also overlap: Apete and Eleyele are 1.8 km apart, so
+much of their surroundings will be shared, and their environmental features will be more
+similar than the real feeders probably are.
+
+What this supports is feeder-level questions ("is ERUWA/LANLATE's corridor more vegetated than
+LIBERTY's?"). It can't answer span-level questions ("which span is closest to a tree?"). That
+would need real line geometry, and nothing in this repo claims otherwise.
+
 ## Architecture
 
 ```
@@ -214,6 +262,12 @@ terraform/                  Platform layer: S3, IAM (with permission boundaries)
                              the remote S3 state backend (see "CI/CD" below).
 etl/transforms.py           Pure canonicalization logic (feeder name, outage type). No
                              pyspark/awsglue imports, unit-tested directly (tests/).
+etl/geo.py                  Feeder service-area geometry (spherical, pure Python, no
+                             geospatial dependencies). See "Where the feeders are" above.
+reference/feeder_locations.csv
+                             One geocoded anchor per feeder, with its OSM source and a
+                             confidence level. Uploaded by Terraform as the feeder_locations
+                             Athena table.
 etl/bronze/bronze_ingest.py Lands the 12 raw monthly workbooks as-is; see its docstring for
                              the header-detection and junk-row handling this required.
 etl/silver/silver_transform.py
@@ -225,8 +279,11 @@ ml/outage_classifier/train_and_predict.py
                              XGBoost training and batch inference. Glue Python Shell, not
                              Spark; see "Why Glue Spark ETL for a dataset this small" above.
 athena/views/                MTTR/MTBF leaderboard, outage-type summary, per-type classifier
-                             accuracy: plain SQL against the gold-layer Glue Catalog tables.
+                             accuracy, and a map-ready join of reliability with feeder
+                             location: plain SQL against the Glue Catalog tables.
 tests/test_transforms.py    Unit tests against etl/transforms.py directly. No Spark, no AWS.
+tests/test_geo.py           Checks every canonical feeder has exactly one location row, that
+                             coordinates are inside the region, and the circle geometry.
 ```
 
 ## Getting Started
@@ -400,6 +457,10 @@ been run:
   pushing to `main` deploys to production behind a required review, both through the same
   Terraform apply over OIDC. Verified against actual AWS resources (the IAM roles, the Glue
   jobs, the Step Functions state machine), not just a green check mark. See "CI/CD" above.
+- 🟡 **Feeder locations: built and tested locally, not yet deployed.** The reference file,
+  geometry module and tests (`tests/test_geo.py`) pass, and `terraform validate` accepts the new
+  `feeder_locations` table. The table and the `feeder_reliability_map` view haven't been applied
+  or queried against live AWS yet.
 
 ## Cost awareness
 

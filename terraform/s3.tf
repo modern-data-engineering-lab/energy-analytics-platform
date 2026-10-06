@@ -71,6 +71,16 @@ resource "aws_s3_object" "gold_script" {
   etag   = filemd5("${path.module}/../etl/gold/gold_aggregate.py")
 }
 
+# Geocoded anchor point per feeder (see etl/geo.py). Reference data rather than pipeline
+# output: it's curated by hand and versioned in git, so Terraform owns it the same way it owns
+# the scripts. Each table needs its own prefix, since Athena reads every file under a location.
+resource "aws_s3_object" "feeder_locations" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "reference/feeder_locations/feeder_locations.csv"
+  source = "${path.module}/../reference/feeder_locations.csv"
+  etag   = filemd5("${path.module}/../reference/feeder_locations.csv")
+}
+
 resource "aws_s3_object" "classifier_script" {
   bucket = aws_s3_bucket.data_lake.id
   key    = "scripts/train_and_predict.py"

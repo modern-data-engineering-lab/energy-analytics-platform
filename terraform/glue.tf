@@ -385,3 +385,45 @@ resource "aws_glue_catalog_table" "classifier_features" {
     }
   }
 }
+
+####################################################
+# Feeder locations: reference data, not pipeline output (see etl/geo.py and the S3 object in
+# s3.tf). OpenCSVSerde rather than the default LazySimpleSerDe because the `anchor` column
+# contains quoted commas. OpenCSVSerde reads every column as a string regardless of the
+# declared type, so they're declared as strings and cast in the Athena view that uses them.
+####################################################
+resource "aws_glue_catalog_table" "feeder_locations" {
+  name          = "feeder_locations"
+  database_name = aws_glue_catalog_database.this.name
+
+  table_type = "EXTERNAL_TABLE"
+  parameters = {
+    classification           = "csv"
+    "skip.header.line.count" = "1"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.bucket}/reference/feeder_locations/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+      parameters = {
+        separatorChar = ","
+        quoteChar     = "\""
+      }
+    }
+
+    dynamic "columns" {
+      for_each = [
+        "feeder_canonical", "latitude", "longitude", "service_radius_km", "confidence",
+        "setting", "anchor",
+      ]
+      content {
+        name = columns.value
+        type = "string"
+      }
+    }
+  }
+}
